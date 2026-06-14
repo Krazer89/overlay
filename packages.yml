@@ -1,0 +1,15 @@
+# Configure automatic updates for ebuilds.
+media-video/gpu-screen-recorder-ui:
+  resolver: git
+  options:
+    url: https://repo.dec05eba.com/gpu-screen-recorder-ui
+
+media-video/gpu-screen-recorder-notification:
+  resolver: git
+  options:
+    url: https://repo.dec05eba.com/gpu-screen-recorder-notification
+
+x11-misc/copyq:
+  resolver: git
+  options:
+    url: https://github.com/hluk/CopyQ

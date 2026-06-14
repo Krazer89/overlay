@@ -1,0 +1,12 @@
+<repositories xmlns="" version="1.0">
+  <repo priority="50" quality="experimental" status="unofficial">
+    <name>krazer89</name>
+    <description>krazer89's personal overlay</description>
+    <homepage>https://github.com/krazer89/overlay</homepage>
+    <owner>
+      <name>Krazer</name>
+    </owner>
+    <source type="git">https://github.com/krazer89/overlay.git</source>
+    <feed>https://github.com/krazer89/overlay.rss</feed>
+  </repo>
+</repositories>

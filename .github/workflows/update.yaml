@@ -1,0 +1,54 @@
+name: "Check for updates"
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Run every day at midnight, https://crontab.guru/#@daily.
+    - cron: "0 0 * * *"
+
+# Ensure updates only run once at a time.
+concurrency:
+  group: "updater-${{ github.repository }}-${{ github.ref }}"
+
+jobs:
+  updater:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v3
+        with:
+          experimental: true
+          github_token: ${{ github.token }}
+      - name: Get Go directories
+        id: go
+        run: |
+          echo "cache_dir=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+          echo "mod_cache_dir=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.go.outputs.cache_dir }}
+          key: ${{ runner.os }}-go-build-cache-${{ hashFiles('**/go.sum') }}
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.go.outputs.mod_cache_dir }}
+          key: ${{ runner.os }}-go-mod-cache-${{ hashFiles('**/go.sum') }}
+      - name: Setup Environment
+        working-directory: .tools
+        run: mise run build
+
+      - name: Run updater
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: mise run update
+      - name: Run linter
+        run: mise run lint
+      - uses: devops-infra/action-commit-push@master
+        with:
+          github_token: ${{ github.token }}
+          commit_message: "chore: automatically update dependencies [skip ci]"
+          organization_domain: github.com
+          user_name: github-actions[bot]
+          user_email: 41898282+github-actions[bot]@users.noreply.github.com
