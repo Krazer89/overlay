@@ -23,7 +23,6 @@ import (
 	"strings"
 
 	logger "charm.land/log/v2"
-	"github.com/krazer89/overlay/.tools/internal/config"
 	"github.com/krazer89/overlay/.tools/internal/ebuild"
 
 	dockerclient "github.com/moby/moby/client"
@@ -60,10 +59,6 @@ type Environment struct {
 // ExecutorInput is input to the executor. This should contain state
 // that existed before the executor was ran.
 type ExecutorInput struct {
-	// Config is the configuration for the updater, which contains
-	// configuration for some steps.
-	Config *config.Config
-
 	// OriginalEbuild is the original ebuild that can be used for
 	// generating a new one.
 	OriginalEbuild *ebuild.Ebuild

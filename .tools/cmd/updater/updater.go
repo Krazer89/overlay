@@ -28,7 +28,6 @@ import (
 	"strings"
 
 	logger "charm.land/log/v2"
-	"github.com/krazer89/overlay/.tools/internal/config"
 	"github.com/krazer89/overlay/.tools/internal/config/packages"
 	"github.com/krazer89/overlay/.tools/internal/ebuild"
 	updater "github.com/krazer89/overlay/.tools/internal/resolver"
@@ -90,11 +89,6 @@ func getDefaultSteps() []steps.Step {
 // entrypoint is the main entrypoint for the updater CLI.
 func entrypoint(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
-
-	cfg, err := config.LoadConfig(".updater.yml")
-	if err != nil {
-		cfg = &config.Config{}
-	}
 
 	pkgs, err := packages.LoadPackages("packages.yml")
 	if err != nil {
@@ -166,7 +160,6 @@ func entrypoint(cmd *cobra.Command, args []string) error {
 		}
 
 		executor := steps.NewExecutor(log, ceSteps, &steps.ExecutorInput{
-			Config:              cfg,
 			OriginalEbuild:      e,
 			ExistingEbuilds:     ebuilds,
 			LatestVersion:       latestVersion,

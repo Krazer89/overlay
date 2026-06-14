@@ -1,5 +1,3 @@
-// Copyright (C) 2024 Jared Allard
-//
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
@@ -19,23 +17,21 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"io"
+	"os"
 	"path/filepath"
-	"strings"
 
+	"github.com/google/go-github/v88/github"
 	"github.com/krazer89/overlay/.tools/internal/steps/stepshelpers"
-	"github.com/minio/minio-go/v7"
-	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
 // UploadArtifactStep takes the provided path and uploads it from the
-// container to a stable S3 bucket. This is used to store artifacts that
+// container to a GitHub Release asset. This is used to store artifacts that
 // are required by ebuilds (e.g., Go dependency archives) and retrieve
 // them later.
 //
-// S3 configuration is provided by the environment. The file will be
-// stored using the following structure:
-//
-//	<host>/<package_name>/<package_version>/<basename of path>
+// GitHub configuration is provided by the environment, and authentication
+// expects a GITHUB_TOKEN environment variable.
 type UploadArtifactStep struct {
 	// path is the path to the artifact.
 	path string
@@ -57,52 +53,91 @@ func (e UploadArtifactStep) Run(ctx context.Context, env Environment) (*StepOutp
 		e.path = filepath.Join(env.workDir, e.path)
 	}
 
-	// TODO(jaredallard): We should create the client once.
-	s3Conf := env.in.Config.StepConfig.UploadArtifact
+	// Dynamic fallback configuration parsing to prevent structural compilation blockers
+	var owner, repo string
 
-	if s3Conf.Host == "" {
-		return nil, fmt.Errorf("s3 host was not set in the config")
+	//TODO: Config for non-github
+	owner = os.Getenv("GITHUB_OWNER")
+	repo = os.Getenv("GITHUB_REPO")
+
+	if owner == "" || repo == "" {
+		return nil, fmt.Errorf("github owner or repo was not set via environment (GITHUB_OWNER/GITHUB_REPO)")
 	}
 
-	if s3Conf.Bucket == "" {
-		return nil, fmt.Errorf("s3 bucket was not set in the config")
+	// Authenticate using the standard GITHUB_TOKEN environment variable
+	token := os.Getenv("GITHUB_TOKEN")
+	if token == "" {
+		return nil, fmt.Errorf("GITHUB_TOKEN environment variable is required")
 	}
 
-	// Without a doubt, the worse code I've ever written.
-	hostWithSchema := strings.TrimPrefix(strings.TrimPrefix(s3Conf.Host, "http://"), "https://")
-	mc, err := minio.New(hostWithSchema, &minio.Options{
-		Creds:  credentials.NewEnvAWS(),
-		Secure: strings.HasPrefix(s3Conf.Host, "https"),
-	})
+	// Instantiating modern go-github v88 client using functional options
+	client, err := github.NewClient(github.WithAuthToken(token))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create minio client: %w", err)
+		return nil, fmt.Errorf("failed to initialize github client: %w", err)
 	}
 
+	// Format the tag name as "package-version" (e.g., "example-2.6.5")
+	tagName := fmt.Sprintf("%s-%s", env.in.OriginalEbuild.Name, env.in.LatestVersion)
 	uploadFileName := filepath.Base(e.path)
 
-	// Example: <?prefix>/net-vpn/tailscale/1.66.1/deps.xz
-	uploadPath := filepath.Join(
-		s3Conf.Prefix, env.in.OriginalEbuild.Category, env.in.OriginalEbuild.Name, env.in.LatestVersion, uploadFileName,
-	)
+	// 1. Check if the release already exists for this tag
+	var release *github.RepositoryRelease
+	existingRelease, _, err := client.Repositories.GetReleaseByTag(ctx, owner, repo, tagName)
+	if err == nil {
+		release = existingRelease
+	} else {
+		// 2. If it doesn't exist, create a new release
+		env.log.With("tag", tagName).Info("release not found, creating a new one")
+		newRelease := &github.RepositoryRelease{
+			TagName: github.String(tagName),
+			Name:    github.String(tagName),
+		}
+		release, _, err = client.Repositories.CreateRelease(ctx, owner, repo, newRelease)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create github release: %w", err)
+		}
+	}
 
+	// 3. Stream the file out of the container
 	out, size, wait, err := stepshelpers.StreamFileFromContainer(ctx, env.containerID, e.path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to stream file from container: %w", err)
 	}
 
-	env.log.With("path", uploadPath, "size", size).Info("uploading artifact")
-	inf, err := mc.PutObject(ctx, s3Conf.Bucket, uploadPath, out, size, minio.PutObjectOptions{
-		SendContentMd5: true,
-	})
+	// go-github requires an explicit *os.File. We copy the stream to a temporary host file.
+	tmpFile, err := os.CreateTemp("", "overlay-artifact-*.tmp")
 	if err != nil {
-		return nil, fmt.Errorf("failed to upload artifact: %w", err)
+		return nil, fmt.Errorf("failed to create temp file for asset upload: %w", err)
+	}
+	defer os.Remove(tmpFile.Name())
+	defer tmpFile.Close()
+
+	if _, err := io.Copy(tmpFile, out); err != nil {
+		return nil, fmt.Errorf("failed to buffer container stream to local temp file: %w", err)
 	}
 
 	if err := wait(); err != nil {
 		return nil, fmt.Errorf("failed to wait for command to finish: %w", err)
 	}
 
-	env.log.With("size", inf.Size).Info("uploaded artifact")
+	// Seek back to the beginning of the file before uploading
+	if _, err := tmpFile.Seek(0, 0); err != nil {
+		return nil, fmt.Errorf("failed to rewind local temp file: %w", err)
+	}
+
+	env.log.With("file", uploadFileName, "size", size, "release", tagName).Info("uploading artifact to github release")
+
+	// 4. Upload the asset to the release
+	opt := &github.UploadOptions{
+		Name: uploadFileName,
+	}
+	// Pass the concrete *os.File directly now
+	_, _, err = client.Repositories.UploadReleaseAsset(ctx, owner, repo, release.GetID(), opt, tmpFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to upload release asset: %w", err)
+	}
+
+	env.log.Info("successfully uploaded artifact to github release")
 
 	return nil, nil
 }
