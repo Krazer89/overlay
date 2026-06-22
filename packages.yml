@@ -14,7 +14,7 @@ x11-misc/copyq:
   options:
     url: https://github.com/hluk/CopyQ
 
-net-misc/ethereal:
+net-misc/et:
   resolver: git
   options:
     url: https://github.com/MisterTea/EternalTerminal
